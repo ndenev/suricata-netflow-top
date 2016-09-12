@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <!-- <meta http-equiv="X-UA-Compatible" content="IE=edge"> -->
+    <title>Suricata Netflow Top Talkers</title>
+    <style type="text/css">
+    body {
+        font-family: "Trebuchet MS", Arial, Helvetica, sans-serif;
+    }
+    table {
+        font-family: "Trebuchet MS", Arial, Helvetica, sans-serif;
+        background-color: #fafafa;
+        border-radius: 5px;
+        width: 100%;
+        /*border: 1px solid black;*/
+    }
+
+    table td, table th {
+        border: 1px solid #999999;
+        text-align: right;
+        padding: 4px;
+        border-radius: 5px;
+    }
+    table td {
+        width: 10%;
+    }
+    /*
+    table tr:nth-child(even) {
+        background-color: #fafafa;
+        border-radius: 10px;
+    }
+    */
+    table tr:hover {
+        background-color: #ddd;
+    }
+
+    table th {
+        padding-top: 6px;
+        padding-bottom: 6px;
+        background-color: #4CAF50;
+        color: white;
+    }
+    #up_arrow,#down_arrow {
+        display: inline;
+        align: left;
+    }
+    #status_cell {
+        columns: 1;
+    }
+
+    </style>
+    <script src="https://d3js.org/d3.v3.min.js" charset="utf-8"></script>
+    <!-- <script src="js/jquery-1.12.4.min.js" charset="utf-8"></script>
+    <script src="js/jquery.sparklines.js" charset="utf-8"></script> -->
+</head>
+<body>
+
+<table id="netflow">
+        <thead>
+            <tr>
+                <th id="flow_id" onclick="sortOn(this)">FlowId<div id="up_arrow">&nbsp;&nbsp;&nbsp;&#x25B2;</div><div id="down_arrow">&#x25BC;</div></th>
+                <th id="proto" onclick="sortOn(this)">Proto<div id="up_arrow">&nbsp;&nbsp;&nbsp;&#x25B2;</div><div id="down_arrow">&#x25BC;</div></th>
+                <th id="src_ip" onclick="sortOn(this)">Src Address<div id="up_arrow">&nbsp;&nbsp;&nbsp;&#x25B2;</div><div id="down_arrow">&#x25BC;</div></th>
+                <th id="src_port" onclick="sortOn(this)">Src Port<div id="up_arrow">&nbsp;&nbsp;&nbsp;&#x25B2;</div><div id="down_arrow">&#x25BC;</div></th>
+                <th id="dest_ip" onclick="sortOn(this)">Dst Address<div id="up_arrow">&nbsp;&nbsp;&nbsp;&#x25B2;</div><div id="down_arrow">&#x25BC;</div></th>
+                <th id="dest_port" onclick="sortOn(this)">Dst Port<div id="up_arrow">&nbsp;&nbsp;&nbsp;&#x25B2;</div><div id="down_arrow">&#x25BC;</div></th>
+                <th id="netflow.bytes" onclick="sortOn(this)">Bytes<div id="up_arrow">&nbsp;&nbsp;&nbsp;&#x25B2;</div><div id="down_arrow">&#x25BC;</div></div></th>
+                <th id="netflow.pkts" onclick="sortOn(this)">Packets<div id="up_arrow">&nbsp;&nbsp;&nbsp;&#x25B2;</div><div id="down_arrow">&#x25BC;</div></th>
+                <th id="netflow.age" onclick="sortOn(this)">Age<div id="up_arrow">&nbsp;&nbsp;&nbsp;&#x25B2;</div><div id="down_arrow">&#x25BC;</div></div></th>
+            </tr>
+        </thead>
+        <tfoot>
+        <tr>
+            <th id="status_cell">Status:<span id="status">Connecting...</span></th><th>Flows:<span id="flows"></span></th>
+        </tr>
+        </tfoot>
+</table>
+<!-- <button onclick="data_table.refresh()">Refresh</button> -->
+<h1>Flow Info</h1>
+<div id="flow_info"></div>
+<h1>Flow Events</h1>
+<div id="flow_events"></div>
+
+<script>
+
+var jsonStream = new EventSource('http://nas.home.lan/netflow.json')
+jsonStream.onopen = function() {
+    document.getElementById('status').textContent = "Connected!";
+}
+jsonStream.onerror = function(e) {
+    document.getElementById('status').textContent = "Connection Lost!";
+    //alert(e.type);
+}
+jsonStream.onmessage = function(e) {
+    //fieldNameElement.textContent = JSON.parse(e.data);
+    document.getElementById('message').textContent = e.data;
+};
+
+/*
+for (var i=0; i < 10; i++) {
+    var table = document.getElementById('netflow');
+    var row = table.insertRow();
+    for (x=0; x < 5; x++) {
+        var cell = row.insertCell();
+        cell.innerHTML = "&nbsp;";
+    }
+}
+*/
+
+class DataStore {
+    constructor(max_size) {
+        this.max_size = max_size;
+        this.max_flows = max_size * 100;
+        this.flow_ttl = 3600 * 1000;
+        this.size = 0;
+        this.data = {};
+        this.old_table = [];
+        this.last_refresh = 0;
+        this.refresh_interval = 1;
+        this.sort_on = "netflow.bytes";
+        this.sort_dir = true;
+        var table = document.getElementById('netflow');
+        var ncells = table.rows[0].cells.length;
+        for (var i=0; i<this.max_size; i++) {
+            var row = table.insertRow(1);
+            //row.onclick = (function() { clickRow(i) });
+            for (var c=0;c<ncells; c++) {
+                var cell = row.insertCell();
+                cell.innerHTML = " _ ";
+            }
+        }
+    }
+    show_flow(row_num) {
+        //console.log("Row " + row_num + " clicked!");
+        var table = document.getElementById("netflow");
+        var row = table[row_num];
+        //console.log(row);
+    }
+    _get_flow_id(data) {
+        //return data.flow_id;
+        return data.flow_id + "/" + data.src_ip + "/" + data.src_port + "/" + data.dest_ip + "/" + data.dest_port;
+    }
+    add_event(e) {
+        if (!e || !"flow_id" in e) {
+            console.log("event is undef or does not have flow_id field!");
+            return;
+        }
+        //console.log("new event " + JSON.stringify(e));
+        //var flow =  this._get_flow_id(e);
+        var flow = e[id];
+        if (flow in this.data) {
+            this.data[flow].events_count += 1;
+            this.data[flow].events.push(e);
+        } else {
+            console.log("event does not match cached flow and is dropped");
+        }
+    }
+    update(netflow) {
+        var flows = document.getElementById("flows");
+        flows.innerHTML = this.size + "/" + this.max_flows;
+        if (netflow) {
+            var id = this._get_flow_id(netflow);
+            //if (netflow.flow_id in this.data ) {
+            if (id in this.data) {
+                //console.log("updaging existing flow " + netflow.flow_id);
+                this.data[id].netflow.bytes += netflow.netflow.bytes;
+                this.data[id].netflow.pkts += netflow.netflow.pkts;
+                //this.data[netflow.flow_id].netflow.bytes += netflow.netflow.bytes;
+                //this.data[netflow.flow_id].netflow.pkts += netflow.netflow.pkts;
+            } else {
+                this.size += 1;
+                netflow.events_count = 0;
+                netflow.events = [];
+                //this.data[netflow.flow_id] = netflow;
+                this.data[id] = netflow;
+            }
+        }
+        //console.log(Date.parse('2016-05-28T15:45:33.003111+0000'));
+        var now = new Date().getTime();
+        var sortable = [];
+        for (var flow in this.data) {
+            var flow_timestamp = Date.parse(this.data[flow].timestamp.replace(/\.([0-9])[0-9]+\+([0-9][0-9])([0-9][0-9])/, '.$1+$2:$3'));
+            var ttl = now - flow_timestamp;
+            if (ttl < this.flow_ttl) {
+                var is_netflow = /^netflow\.(.*)$/;
+                var match = is_netflow.exec(this.sort_on);
+                if (match) {
+                    sortable.push([flow, this.data[flow]["netflow"][match[1]]]);
+                } else {
+                    sortable.push([flow, this.data[flow][this.sort_on]]);
+                }
+                this.data[flow].ttl = ttl;
+            } else {
+                console.log("Expiring flow " + flow);
+                delete this.data[flow];
+                this.size -= 1;
+            }
+        }
+        if (netflow) {
+            if ((now - this.last_refresh) < this.refresh_interval) {
+                return;
+            }
+        }
+        if (typeof sortable[0][1] == typeof "string") {
+            if (this.sort_dir) {
+                sortable.sort((function(a, b) {
+                    if(a[1] < b[1]) return -1;
+                    if(a[1] > b[1]) return 1;
+                    return 0;
+                }))
+            } else {
+                sortable.sort((function(a, b) {
+                    if(a[1] < b[1]) return 1;
+                    if(a[1] > b[1]) return -1;
+                    return 0;
+                }))
+            }
+        } else {
+            if (this.sort_dir) {
+                sortable.sort(function(a, b) {return b[1] - a[1]});
+            } else {
+                sortable.sort(function(a, b) {return a[1] - b[1]});
+            }
+        }
+        if (sortable.length > this.max_flows) {
+            console.log("Purging " + (sortable.length - this.max_flows) + " flows.");
+            for (var e in sortable.splice(this.max_flows, sortable.length)) {
+                var d = delete this.data[sortable[e][0]];
+                this.size -= 1;
+            }
+        }
+        var table = document.getElementById('netflow');
+        for (var i=0; i<this.max_size;i++) {
+            if (sortable[i]) {
+                var flow = sortable[i][0];
+                var row = table.rows[i+1];
+                for (var c=0; c<row.cells.length; c++) {
+                    var is_netflow = /^netflow\.(.*)$/;
+                    var match = is_netflow.exec(table.rows[0].cells[c].id);
+                    if (match) {
+                        row.cells[c].innerHTML = this.data[flow]["netflow"][match[1]];
+                    } else {
+                        row.cells[c].innerHTML = this.data[flow][table.rows[0].cells[c].id];
+                    }
+                }
+            }
+        }
+        this.last_refresh = Math.round(new Date().getTime());
+        var sort_on = document.getElementById(data_table.sort_on);
+        sort_on.childNodes[data_table.sort_dir ? 1 : 2].style.color = "white";
+        sort_on.childNodes[data_table.sort_dir ? 2 : 1].style.color = "black";
+    }
+}
+
+var data_table = new DataStore(20);
+
+function clickRow(i) {
+    data_table.show_flow(i);
+}
+
+function sortOn(element) {
+    var old_sort_on = document.getElementById(data_table.sort_on);
+    if (old_sort_on.id == element.id) {
+        data_table.sort_dir = !data_table.sort_dir;
+    } else {
+        old_sort_on.childNodes[1].style.color = "white";
+        old_sort_on.childNodes[2].style.color = "white";
+        data_table.sort_on = element.id;
+    }
+    data_table.update();
+}
+
+jsonStream.addEventListener('netflow', function (e) {
+    var netflow = JSON.parse(e.data);
+    data_table.update(netflow);
+}, false);
+
+/*
+jsonStream.addEventListener('tls', function (e) {
+    var data = JSON.parse(e.data);
+    data_table.add_event(data);
+    var events = document.getElementById("flow_events");
+    //events.innerHTML = events.innerHTML + "<pre>" + JSON.stringify(data, undefined, 4) + "</pre><br>";
+}, false);
+*/
+/*
+jsonStream.addEventListener('*', function (e) {
+    var data = JSON.parse(e.data);
+    data_table.add_event(data);
+    //var events = document.getElementById("flow_events");
+    //events.innerHTML = events.innerHTML + "<pre>" + JSON.stringify(data, undefined, 4) + "</pre><br>";
+}, false);
+*/
+/*
+jsonStream.addEventListener('http', function (e) {
+    var data = JSON.parse(e.data);
+    data_table.add_event(data);
+    var events = document.getElementById("flow_events");
+    events.innerHTML = events.innerHTML + "<pre>" + JSON.stringify(data, undefined, 4) + "</pre><br>";
+}, false);
+
+jsonStream.addEventListener('fileinfo', function (e) {
+    var data = JSON.parse(e.data);
+    data_table.add_event(data);
+    var events = document.getElementById("flow_events");
+    events.innerHTML = events.innerHTML + "<pre>" + JSON.stringify(data, undefined, 4) + "</pre><br>";
+}, false);
+
+jsonStream.addEventListener('alert', function (e) {
+    var data = JSON.parse(e.data);
+    data_table.add_event(data);
+    var events = document.getElementById("flow_events");
+    events.innerHTML = events.innerHTML + "<pre>" + JSON.stringify(data, undefined, 4) + "</pre><br>";
+}, false);
+*/
+</script>
+
+</body>
+</html>

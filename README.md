@@ -1,6 +1,8 @@
 # Suricata-Netflow-Top
 Simple web UI showing top flows seen by Suricata.
 
+![](/suricata-netflow-top.png)
+
 **DISCLAIMER: I made this some time ago to play with JavaScript for the first time, so this
 might explain why it is so ugly**
 
